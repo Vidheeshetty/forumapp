@@ -32,7 +32,7 @@ class AuthProvider extends ChangeNotifier {
         await _loadForumUser();
       }
     } catch (e) {
-      print('Error checking auth status: $e');
+      safePrint('Error checking auth status: $e');
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -44,9 +44,11 @@ class AuthProvider extends ChangeNotifier {
 
     try {
       _forumUser = await _apiService.getUser(_user!.userId);
-      await _updateOnlineStatus(true);
+      if (_forumUser != null) {
+        await _updateOnlineStatus(true);
+      }
     } catch (e) {
-      print('Error loading forum user: $e');
+      safePrint('Error loading forum user: $e');
     }
   }
 
@@ -67,13 +69,39 @@ class AuthProvider extends ChangeNotifier {
       );
 
       if (result.isSignUpComplete) {
+        // User is automatically confirmed
         return await signIn(email, password);
       } else {
-        // Handle email verification if needed
+        // User needs to confirm email
+        // You might want to navigate to a confirmation screen here
+        safePrint('User needs to confirm email');
         return false;
       }
     } catch (e) {
-      print('Sign up error: $e');
+      safePrint('Sign up error: $e');
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> confirmSignUp(String email, String confirmationCode) async {
+    try {
+      _isLoading = true;
+      notifyListeners();
+
+      final result = await Amplify.Auth.confirmSignUp(
+        username: email,
+        confirmationCode: confirmationCode,
+      );
+
+      if (result.isSignUpComplete) {
+        return true;
+      }
+      return false;
+    } catch (e) {
+      safePrint('Confirmation error: $e');
       return false;
     } finally {
       _isLoading = false;
@@ -98,7 +126,7 @@ class AuthProvider extends ChangeNotifier {
       }
       return false;
     } catch (e) {
-      print('Sign in error: $e');
+      safePrint('Sign in error: $e');
       return false;
     } finally {
       _isLoading = false;
@@ -108,13 +136,15 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> signOut() async {
     try {
-      await _updateOnlineStatus(false);
+      if (_forumUser != null) {
+        await _updateOnlineStatus(false);
+      }
       await Amplify.Auth.signOut();
       _user = null;
       _forumUser = null;
       notifyListeners();
     } catch (e) {
-      print('Sign out error: $e');
+      safePrint('Sign out error: $e');
     }
   }
 
@@ -124,7 +154,7 @@ class AuthProvider extends ChangeNotifier {
     try {
       await _apiService.updateUserOnlineStatus(_forumUser!.id, isOnline);
     } catch (e) {
-      print('Error updating online status: $e');
+      safePrint('Error updating online status: $e');
     }
   }
 

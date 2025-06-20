@@ -1,3 +1,4 @@
+# Configure AWS Provider
 terraform {
   required_providers {
     aws = {
@@ -11,9 +12,24 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Variables
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "ap-southeast-2"
+}
+
+variable "project_name" {
+  description = "Project name for resource naming"
+  type        = string
+  default     = "forum-app"
+}
+
 # Cognito User Pool
-resource "aws_cognito_user_pool" "forum_user_pool" {
-  name = "forum-user-pool"
+resource "aws_cognito_user_pool" "forum_users" {
+  name = "${var.project_name}-users"
+
+  username_attributes = ["email"]
 
   password_policy {
     minimum_length    = 8
@@ -25,104 +41,65 @@ resource "aws_cognito_user_pool" "forum_user_pool" {
 
   auto_verified_attributes = ["email"]
 
+  email_configuration {
+    email_sending_account = "COGNITO_DEFAULT"
+  }
+
   schema {
     attribute_data_type = "String"
     name               = "email"
     required           = true
-    mutable            = true
+    mutable           = true
   }
 
   schema {
     attribute_data_type = "String"
-    name               = "preferred_username"
-    required           = false
-    mutable            = true
+    name               = "username"
+    required           = true
+    mutable           = false
+  }
+
+  tags = {
+    Name = "${var.project_name}-user-pool"
   }
 }
 
+# Cognito User Pool Client - FIXED
 resource "aws_cognito_user_pool_client" "forum_client" {
-  name         = "forum-client"
-  user_pool_id = aws_cognito_user_pool.forum_user_pool.id
-
-  generate_secret = false
+  name         = "${var.project_name}-client"
+  user_pool_id = aws_cognito_user_pool.forum_users.id
 
   explicit_auth_flows = [
     "ADMIN_NO_SRP_AUTH",
     "USER_PASSWORD_AUTH",
-    "USER_SRP_AUTH"
+    "ALLOW_ADMIN_USER_PASSWORD_AUTH",
+    "ALLOW_USER_PASSWORD_AUTH",
+    "ALLOW_USER_SRP_AUTH",
+    "ALLOW_REFRESH_TOKEN_AUTH"
   ]
-}
 
-resource "aws_cognito_identity_pool" "forum_identity_pool" {
-  identity_pool_name               = "forum_identity_pool"
-  allow_unauthenticated_identities = false
+  generate_secret                = false
+  prevent_user_existence_errors  = "ENABLED"
+  enable_token_revocation       = true
 
-  cognito_identity_providers {
-    client_id               = aws_cognito_user_pool_client.forum_client.id
-    provider_name           = aws_cognito_user_pool.forum_user_pool.endpoint
-    server_side_token_check = false
-  }
-}
+  access_token_validity  = 60
+  id_token_validity     = 60
+  refresh_token_validity = 30
 
-# DynamoDB Tables
-resource "aws_dynamodb_table" "posts" {
-  name           = "forum-posts"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "id"
-
-  attribute {
-    name = "id"
-    type = "S"
-  }
-
-  tags = {
-    Name = "ForumPosts"
-  }
-}
-
-resource "aws_dynamodb_table" "comments" {
-  name           = "forum-comments"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "id"
-
-  attribute {
-    name = "id"
-    type = "S"
-  }
-
-  attribute {
-    name = "postId"
-    type = "S"
-  }
-
-  global_secondary_index {
-    name     = "PostIdIndex"
-    hash_key = "postId"
-  }
-
-  tags = {
-    Name = "ForumComments"
-  }
-}
-
-resource "aws_dynamodb_table" "users" {
-  name           = "forum-users"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "id"
-
-  attribute {
-    name = "id"
-    type = "S"
-  }
-
-  tags = {
-    Name = "ForumUsers"
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "days"
   }
 }
 
 # S3 Bucket for file uploads
 resource "aws_s3_bucket" "forum_uploads" {
-  bucket = "forum-app-uploads-${random_string.bucket_suffix.result}"
+  bucket = "${var.project_name}-uploads-${random_string.bucket_suffix.result}"
+
+  tags = {
+    Name = "${var.project_name}-uploads"
+  }
 }
 
 resource "random_string" "bucket_suffix" {
@@ -131,41 +108,135 @@ resource "random_string" "bucket_suffix" {
   upper   = false
 }
 
+resource "aws_s3_bucket_versioning" "forum_uploads_versioning" {
+  bucket = aws_s3_bucket.forum_uploads.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "forum_uploads_encryption" {
+  bucket = aws_s3_bucket.forum_uploads.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
 resource "aws_s3_bucket_cors_configuration" "forum_uploads_cors" {
   bucket = aws_s3_bucket.forum_uploads.id
 
   cors_rule {
     allowed_headers = ["*"]
-    allowed_methods = ["GET", "PUT", "POST", "DELETE", "HEAD"]
+    allowed_methods = ["GET", "POST", "PUT", "DELETE"]
     allowed_origins = ["*"]
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
   }
 }
 
-# Lambda Function
-resource "aws_lambda_function" "forum_api" {
-  filename         = "forum-api.zip"
-  function_name    = "forum-api"
-  role            = aws_iam_role.lambda_role.arn
-  handler         = "index.handler"
-  runtime         = "nodejs18.x"
-  timeout         = 30
+# DynamoDB Tables
+resource "aws_dynamodb_table" "posts" {
+  name           = "${var.project_name}-posts"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "id"
 
-  environment {
-    variables = {
-      POSTS_TABLE    = aws_dynamodb_table.posts.name
-      COMMENTS_TABLE = aws_dynamodb_table.comments.name
-      USERS_TABLE    = aws_dynamodb_table.users.name
-    }
+  attribute {
+    name = "id"
+    type = "S"
   }
 
-  depends_on = [aws_iam_role_policy_attachment.lambda_policy]
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name     = "created-at-index"
+    hash_key = "created_at"
+    projection_type = "ALL"
+  }
+
+  tags = {
+    Name = "${var.project_name}-posts"
+  }
+}
+
+# Comments Table - FIXED
+resource "aws_dynamodb_table" "comments" {
+  name           = "${var.project_name}-comments"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  attribute {
+    name = "post_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name               = "post-id-index"
+    hash_key          = "post_id"
+    range_key         = "created_at"
+    projection_type   = "ALL"
+  }
+
+  tags = {
+    Name = "${var.project_name}-comments"
+  }
+}
+
+resource "aws_dynamodb_table" "votes" {
+  name           = "${var.project_name}-votes"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "post_id"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name     = "user-id-index"
+    hash_key = "user_id"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name     = "post-id-index"
+    hash_key = "post_id"
+    projection_type = "ALL"
+  }
+
+  tags = {
+    Name = "${var.project_name}-votes"
+  }
 }
 
 # IAM Role for Lambda
 resource "aws_iam_role" "lambda_role" {
-  name = "forum-lambda-role"
+  name = "${var.project_name}-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -181,8 +252,9 @@ resource "aws_iam_role" "lambda_role" {
   })
 }
 
-resource "aws_iam_policy" "lambda_policy" {
-  name = "forum-lambda-policy"
+resource "aws_iam_role_policy" "lambda_policy" {
+  name = "${var.project_name}-lambda-policy"
+  role = aws_iam_role.lambda_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -203,39 +275,58 @@ resource "aws_iam_policy" "lambda_policy" {
           "dynamodb:PutItem",
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
-          "dynamodb:Scan",
-          "dynamodb:Query"
+          "dynamodb:Query",
+          "dynamodb:Scan"
         ]
         Resource = [
           aws_dynamodb_table.posts.arn,
           aws_dynamodb_table.comments.arn,
-          aws_dynamodb_table.users.arn,
-          "${aws_dynamodb_table.comments.arn}/index/*"
+          aws_dynamodb_table.votes.arn,
+          "${aws_dynamodb_table.posts.arn}/index/*",
+          "${aws_dynamodb_table.comments.arn}/index/*",
+          "${aws_dynamodb_table.votes.arn}/index/*"
         ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+          "s3:DeleteObject"
+        ]
+        Resource = "${aws_s3_bucket.forum_uploads.arn}/*"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "lambda_policy" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.lambda_policy.arn
-}
+# Lambda Function
+resource "aws_lambda_function" "forum_api" {
+  filename         = "forum-api.zip"
+  function_name    = "${var.project_name}-api"
+  role            = aws_iam_role.lambda_role.arn
+  handler         = "forum-api.handler"
+  runtime         = "nodejs18.x"
+  timeout         = 30
 
-# API Gateway
-resource "aws_api_gateway_rest_api" "forum_api" {
-  name = "forum-api"
+  source_code_hash = filebase64sha256("forum-api.zip")
 
-  endpoint_configuration {
-    types = ["REGIONAL"]
+  environment {
+    variables = {
+      POSTS_TABLE = aws_dynamodb_table.posts.name
+      COMMENTS_TABLE = aws_dynamodb_table.comments.name
+      VOTES_TABLE = aws_dynamodb_table.votes.name
+      S3_BUCKET = aws_s3_bucket.forum_uploads.bucket
+    }
   }
+
+  depends_on = [aws_iam_role_policy.lambda_policy]
 }
 
-resource "aws_api_gateway_authorizer" "cognito_authorizer" {
-  name          = "CognitoAuthorizer"
-  rest_api_id   = aws_api_gateway_rest_api.forum_api.id
-  type          = "COGNITO_USER_POOLS"
-  provider_arns = [aws_cognito_user_pool.forum_user_pool.arn]
+# API Gateway - FIXED (removed cors_configuration)
+resource "aws_api_gateway_rest_api" "forum_api" {
+  name        = "${var.project_name}-api"
+  description = "Forum API Gateway"
 }
 
 resource "aws_api_gateway_resource" "proxy" {
@@ -248,8 +339,7 @@ resource "aws_api_gateway_method" "proxy" {
   rest_api_id   = aws_api_gateway_rest_api.forum_api.id
   resource_id   = aws_api_gateway_resource.proxy.id
   http_method   = "ANY"
-  authorization = "COGNITO_USER_POOLS"
-  authorizer_id = aws_api_gateway_authorizer.cognito_authorizer.id
+  authorization = "NONE"
 }
 
 resource "aws_api_gateway_integration" "lambda" {
@@ -258,17 +348,80 @@ resource "aws_api_gateway_integration" "lambda" {
   http_method = aws_api_gateway_method.proxy.http_method
 
   integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.forum_api.invoke_arn
+  type                   = "AWS_PROXY"
+  uri                    = aws_lambda_function.forum_api.invoke_arn
+}
+
+resource "aws_api_gateway_method" "proxy_root" {
+  rest_api_id   = aws_api_gateway_rest_api.forum_api.id
+  resource_id   = aws_api_gateway_rest_api.forum_api.root_resource_id
+  http_method   = "ANY"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "lambda_root" {
+  rest_api_id = aws_api_gateway_rest_api.forum_api.id
+  resource_id = aws_api_gateway_method.proxy_root.resource_id
+  http_method = aws_api_gateway_method.proxy_root.http_method
+
+  integration_http_method = "POST"
+  type                   = "AWS_PROXY"
+  uri                    = aws_lambda_function.forum_api.invoke_arn
 }
 
 resource "aws_api_gateway_deployment" "forum_api" {
   depends_on = [
-    aws_api_gateway_integration.lambda
+    aws_api_gateway_integration.lambda,
+    aws_api_gateway_integration.lambda_root,
   ]
 
   rest_api_id = aws_api_gateway_rest_api.forum_api.id
   stage_name  = "prod"
+}
+
+# Enable CORS
+resource "aws_api_gateway_method" "options" {
+  rest_api_id   = aws_api_gateway_rest_api.forum_api.id
+  resource_id   = aws_api_gateway_resource.proxy.id
+  http_method   = "OPTIONS"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "options" {
+  rest_api_id = aws_api_gateway_rest_api.forum_api.id
+  resource_id = aws_api_gateway_resource.proxy.id
+  http_method = aws_api_gateway_method.options.http_method
+  type        = "MOCK"
+
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_method_response" "options" {
+  rest_api_id = aws_api_gateway_rest_api.forum_api.id
+  resource_id = aws_api_gateway_resource.proxy.id
+  http_method = aws_api_gateway_method.options.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Origin"  = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "options" {
+  rest_api_id = aws_api_gateway_rest_api.forum_api.id
+  resource_id = aws_api_gateway_resource.proxy.id
+  http_method = aws_api_gateway_method.options.http_method
+  status_code = aws_api_gateway_method_response.options.status_code
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Methods" = "'GET,POST,PUT,DELETE,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+  }
 }
 
 resource "aws_lambda_permission" "api_gw" {
@@ -276,5 +429,23 @@ resource "aws_lambda_permission" "api_gw" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.forum_api.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.forum_api.execution_arn}/*/*"
+
+  source_arn = "${aws_api_gateway_rest_api.forum_api.execution_arn}/*/*"
+}
+
+# Outputs
+output "cognito_user_pool_id" {
+  value = aws_cognito_user_pool.forum_users.id
+}
+
+output "cognito_client_id" {
+  value = aws_cognito_user_pool_client.forum_client.id
+}
+
+output "api_gateway_url" {
+  value = aws_api_gateway_deployment.forum_api.invoke_url
+}
+
+output "s3_bucket_name" {
+  value = aws_s3_bucket.forum_uploads.bucket
 }

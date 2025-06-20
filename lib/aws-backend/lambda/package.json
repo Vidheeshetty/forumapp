@@ -1,0 +1,15 @@
+{
+  "name": "forum-api",
+  "version": "1.0.0",
+  "description": "Forum API Lambda function",
+  "main": "forum-api.js",
+  "dependencies": {
+    "uuid": "^9.0.0"
+  },
+  "scripts": {
+    "start": "node forum-api.js"
+  },
+  "keywords": ["forum", "api", "lambda"],
+  "author": "Your Name",
+  "license": "MIT"
+}

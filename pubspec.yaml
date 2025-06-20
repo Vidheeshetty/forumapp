@@ -1,0 +1,33 @@
+name: forumapp
+description: A Flutter forum application with AWS backend
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # AWS Amplify - Use version 1.x for better compatibility
+  amplify_flutter: ^1.8.0
+  amplify_auth_cognito: ^1.8.0
+  amplify_api: ^1.8.0
+  amplify_storage_s3: ^1.8.0
+
+  # UI and State Management
+  cupertino_icons: ^1.0.6
+  provider: ^6.1.1
+
+  # Utilities
+  http: ^0.13.6
+  intl: ^0.18.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
